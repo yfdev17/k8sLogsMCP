@@ -82,9 +82,9 @@ Register **one server per environment**. The environment then shows in every too
 BIN=/absolute/path/to/k8s-logs-mcp/bin/k8s-logs-mcp
 LOGS=/absolute/path/to/k8s-logs-mcp/logs
 
-claude mcp add k8s-logs-dev   -s user -- "$BIN" --kubeconfig "/path/to/dev-kubeconfig"   --logs-dir "$LOGS/dev"
-claude mcp add k8s-logs-test  -s user -- "$BIN" --kubeconfig "/path/to/test-kubeconfig"  --logs-dir "$LOGS/test"
-claude mcp add k8s-logs-stage -s user -- "$BIN" --kubeconfig "/path/to/stage-kubeconfig" --logs-dir "$LOGS/stage"
+claude mcp add k8s-logs-dev   -s user -- "$BIN" --kubeconfig "/path/to/dev-kubeconfig"   --logs-dir "$LOGS/dev" --env dev
+claude mcp add k8s-logs-test  -s user -- "$BIN" --kubeconfig "/path/to/test-kubeconfig"  --logs-dir "$LOGS/test" --env test
+claude mcp add k8s-logs-stage -s user -- "$BIN" --kubeconfig "/path/to/stage-kubeconfig" --logs-dir "$LOGS/stage" --env stage
 ```
 
 - `-s user` makes the server available in **all** your projects. Use `-s project` to share it
@@ -107,7 +107,8 @@ cluster:
     "command": "/absolute/path/to/k8s-logs-mcp/bin/k8s-logs-mcp",
     "args": [
       "--kubeconfig", "/Users/me/Library/Application Support/Freelens/kubeconfigs/<dev-file-id>",
-      "--logs-dir", "/absolute/path/to/k8s-logs-mcp/logs/dev"
+      "--logs-dir", "/absolute/path/to/k8s-logs-mcp/logs/dev",
+      "--env", "dev"
     ]
   },
   "k8s-logs-test": {
@@ -115,7 +116,8 @@ cluster:
     "command": "/absolute/path/to/k8s-logs-mcp/bin/k8s-logs-mcp",
     "args": [
       "--kubeconfig", "/Users/me/Library/Application Support/Freelens/kubeconfigs/<test-file-id>",
-      "--logs-dir", "/absolute/path/to/k8s-logs-mcp/logs/test"
+      "--logs-dir", "/absolute/path/to/k8s-logs-mcp/logs/test",
+      "--env", "test"
     ]
   },
   "k8s-logs-stage": {
@@ -123,7 +125,8 @@ cluster:
     "command": "/absolute/path/to/k8s-logs-mcp/bin/k8s-logs-mcp",
     "args": [
       "--kubeconfig", "/Users/me/Library/Application Support/Freelens/kubeconfigs/<stage-file-id>",
-      "--logs-dir", "/absolute/path/to/k8s-logs-mcp/logs/stage"
+      "--logs-dir", "/absolute/path/to/k8s-logs-mcp/logs/stage",
+      "--env", "stage"
     ]
   }
 }
@@ -163,7 +166,16 @@ you or pick one itself.
 | "Why does ms-calculations-worker keep restarting?" | `list_service_pods`, then `get_service_logs` with `previous: true` |
 | "Download all logs of ms-accounting from test" | `download_service_logs` |
 
-Downloaded logs are saved as:
+Downloaded logs are saved into the project of the service when Claude knows it. With a workspace
+holding many projects, "download all logs of ms-processes-v2 from dev" lands in that project's own
+folder (Claude passes its path as `project_dir`):
+
+```
+<project_dir>/logs/<env>/<YYYYMMDD-HHMMSS>/<pod>_<container>.log
+```
+
+`<env>` is the server's `--env` flag (`dev`, `test`, ...), or the context name when it is not set.
+Add `logs/` to the project's `.gitignore`. Without a project the files go to:
 
 ```
 <logs-dir>/<service>/<YYYYMMDD-HHMMSS>/<pod>_<container>.log
@@ -197,6 +209,7 @@ the server defaults for that one call.
 | `previous` | `false` | Logs of the previous container instance (after a crash or restart). |
 | `timestamps` | `false` | Prefix each line with its timestamp. |
 | `tail_lines` | `200` for get, all for download | Last N lines per container. `0` means everything. |
+| `project_dir` | none | download only: absolute path of the service's project; files go to `<project_dir>/logs/<env>/<timestamp>/`. |
 | `filter` | none | get only: keep lines matching this Go regexp, e.g. `(?i)error\|panic`. |
 | `max_bytes_per_container` | `65536` | get only: keep at most this many bytes of the newest lines per container. |
 
@@ -226,7 +239,8 @@ Kinds the credentials may not read are skipped rather than failing the request.
 | `--kubeconfig` | `$KUBECONFIG`, then `~/.kube/config` | Kubeconfig file. |
 | `--context` | the file's current-context | Default context. |
 | `--namespace` | the context's namespace | Default namespace. |
-| `--logs-dir` | `./logs` | Where downloads go. Use an absolute path. |
+| `--logs-dir` | `./logs` | Where downloads go when a call names no `project_dir`. Use an absolute path. |
+| `--env` | the context name | Environment name in project log paths: `<project_dir>/logs/<env>/`. |
 | `--transport` | `stdio` | `stdio` for Claude Code / Desktop / Cursor, or `http`. |
 | `--addr` | `127.0.0.1:8080` | Listen address for `--transport http`. |
 | `--version` | | Print the version and exit. |
@@ -240,7 +254,7 @@ Claude Desktop, Cursor and a project `.mcp.json` use the same entry:
   "mcpServers": {
     "k8s-logs-dev": {
       "command": "/absolute/path/to/bin/k8s-logs-mcp",
-      "args": ["--kubeconfig", "/path/to/dev-kubeconfig", "--logs-dir", "/absolute/path/to/logs/dev"]
+      "args": ["--kubeconfig", "/path/to/dev-kubeconfig", "--logs-dir", "/absolute/path/to/logs/dev", "--env", "dev"]
     }
   }
 }

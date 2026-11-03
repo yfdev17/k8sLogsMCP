@@ -2,6 +2,7 @@ package tools
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"slices"
 	"testing"
 
@@ -69,5 +70,35 @@ func TestIsSafeDirName(t *testing.T) {
 		if got := isSafeDirName(name); got != want {
 			t.Errorf("isSafeDirName(%q) = %v, want %v", name, got, want)
 		}
+	}
+}
+
+func TestDownloadDir(t *testing.T) {
+	project := t.TempDir()
+	h := &handlers{cfg: Config{LogsDir: "/srv/logs", Env: "dev"}}
+
+	tests := []struct {
+		name    string
+		h       *handlers
+		in      downloadInput
+		want    string // directory above the timestamp
+		wantErr bool
+	}{
+		{"no project", h, downloadInput{serviceTarget: serviceTarget{Service: "svc"}}, "/srv/logs/svc", false},
+		{"project with env", h, downloadInput{ProjectDir: project}, filepath.Join(project, "logs", "dev"), false},
+		{"project falls back to context", &handlers{}, downloadInput{ProjectDir: project}, filepath.Join(project, "logs", "arn_aws_eks_cluster"), false},
+		{"relative project", h, downloadInput{ProjectDir: "rel"}, "", true},
+		{"missing project", h, downloadInput{ProjectDir: filepath.Join(project, "nope")}, "", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := tt.h.downloadDir(tt.in, "arn:aws:eks/cluster")
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("downloadDir error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if !tt.wantErr && filepath.Dir(got) != tt.want {
+				t.Errorf("downloadDir = %q, want %q/<timestamp>", got, tt.want)
+			}
+		})
 	}
 }

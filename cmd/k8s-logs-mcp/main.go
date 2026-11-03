@@ -36,7 +36,8 @@ func run() error {
 		kubeconfig = flag.String("kubeconfig", "", "kubeconfig file (default $KUBECONFIG or ~/.kube/config)")
 		kubeCtx    = flag.String("context", "", "kubeconfig context (default current-context)")
 		namespace  = flag.String("namespace", "", "default namespace (default: the context namespace)")
-		logsDir    = flag.String("logs-dir", "logs", "directory for downloaded logs")
+		logsDir    = flag.String("logs-dir", "logs", "directory for downloaded logs when a call names no project")
+		env        = flag.String("env", "", "environment name for project log paths <project>/logs/<env>/ (default: the context name)")
 		transport  = flag.String("transport", "stdio", "transport: stdio or http")
 		addr       = flag.String("addr", "127.0.0.1:8080", "listen address for the http transport")
 		showVer    = flag.Bool("version", false, "print version and exit")
@@ -67,6 +68,7 @@ func run() error {
 	tools.Register(server, tools.Config{
 		Kube:      kube.NewManager(*kubeconfig, *kubeCtx),
 		LogsDir:   dir,
+		Env:       *env,
 		Namespace: *namespace,
 	})
 

@@ -5,11 +5,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	corev1 "k8s.io/api/core/v1"
@@ -27,9 +29,12 @@ const (
 // Config is what the tools need from the server.
 type Config struct {
 	Kube *kube.Manager
-	// LogsDir is the root for downloaded logs; files go to
-	// <LogsDir>/<service>/<timestamp>/.
+	// LogsDir is the root for downloaded logs when a call names no project;
+	// files go to <LogsDir>/<service>/<timestamp>/.
 	LogsDir string
+	// Env names the environment (dev, test, stage) in project log paths:
+	// <project_dir>/logs/<Env>/<timestamp>/. Empty means the context name.
+	Env string
 	// Namespace overrides the kubeconfig context namespace when a tool call
 	// does not name one.
 	Namespace string
@@ -78,8 +83,11 @@ func Register(s *mcp.Server, cfg Config) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "download_service_logs",
-		Description: "Download complete logs of all pods of a service to local files under " +
-			"<logs-dir>/<service>/<timestamp>/<pod>_<container>.log and return the file paths.",
+		Description: "Download complete logs of all pods of a service to local files and return the file paths. " +
+			"When the user works in a project for this service (e.g. a folder named like the service inside the open " +
+			"workspace), pass its absolute path as project_dir: files go to " +
+			"<project_dir>/logs/<env>/<timestamp>/<pod>_<container>.log. Without project_dir they go to " +
+			"<logs-dir>/<service>/<timestamp>/.",
 		Annotations: &mcp.ToolAnnotations{IdempotentHint: false, DestructiveHint: new(false)},
 	}, h.downloadServiceLogs)
 }
@@ -123,7 +131,8 @@ type getLogsInput struct {
 type downloadInput struct {
 	serviceTarget
 	logParams
-	TailLines int64 `json:"tail_lines,omitempty" jsonschema:"last N lines per container; default 0 = complete logs"`
+	TailLines  int64  `json:"tail_lines,omitempty" jsonschema:"last N lines per container; default 0 = complete logs"`
+	ProjectDir string `json:"project_dir,omitempty" jsonschema:"absolute path of the project directory of this service; logs go to <project_dir>/logs/<env>/<timestamp>/"`
 }
 
 // Outputs.
@@ -411,7 +420,7 @@ func (h *handlers) downloadServiceLogs(ctx context.Context, _ *mcp.CallToolReque
 		return nil, downloadOutput{}, errors.New("tail_lines must be >= 0")
 	}
 	opts.TailLines = in.TailLines
-	if !isSafeDirName(in.Service) {
+	if in.ProjectDir == "" && !isSafeDirName(in.Service) {
 		return nil, downloadOutput{}, fmt.Errorf("service %q is not a valid directory name", in.Service)
 	}
 
@@ -419,7 +428,10 @@ func (h *handlers) downloadServiceLogs(ctx context.Context, _ *mcp.CallToolReque
 	if err != nil {
 		return nil, downloadOutput{}, err
 	}
-	dir := filepath.Join(h.cfg.LogsDir, in.Service, time.Now().Format("20060102-150405"))
+	dir, err := h.downloadDir(in, c.Context)
+	if err != nil {
+		return nil, downloadOutput{}, err
+	}
 	files, err := c.DownloadLogs(ctx, sel.Namespace, kube.Streams(sel.Pods, opts), opts, dir)
 	if err != nil {
 		return nil, downloadOutput{}, err
@@ -512,6 +524,45 @@ func describePod(p corev1.Pod) podInfo {
 		pi.InitContainers = append(pi.InitContainers, c.Name)
 	}
 	return pi
+}
+
+// downloadDir returns the directory for one download:
+// <project_dir>/logs/<env>/<timestamp> when the call names a project, else
+// <logs-dir>/<service>/<timestamp>.
+func (h *handlers) downloadDir(in downloadInput, kubeContext string) (string, error) {
+	stamp := time.Now().Format("20060102-150405")
+	if in.ProjectDir == "" {
+		return filepath.Join(h.cfg.LogsDir, in.Service, stamp), nil
+	}
+	if !filepath.IsAbs(in.ProjectDir) {
+		return "", fmt.Errorf("project_dir %q must be an absolute path", in.ProjectDir)
+	}
+	fi, err := os.Stat(in.ProjectDir)
+	if err != nil {
+		return "", fmt.Errorf("project_dir: %w", err)
+	}
+	if !fi.IsDir() {
+		return "", fmt.Errorf("project_dir %q is not a directory", in.ProjectDir)
+	}
+	env := h.cfg.Env
+	if env == "" {
+		env = kubeContext
+	}
+	return filepath.Join(in.ProjectDir, "logs", sanitizeDirName(env), stamp), nil
+}
+
+// sanitizeDirName turns name into a single safe path element.
+func sanitizeDirName(name string) string {
+	name = strings.Map(func(r rune) rune {
+		if r == '-' || r == '_' || r == '.' || unicode.IsLetter(r) || unicode.IsDigit(r) {
+			return r
+		}
+		return '_'
+	}, name)
+	if !isSafeDirName(name) || strings.Trim(name, ".") == "" {
+		return "default"
+	}
+	return name
 }
 
 // isSafeDirName reports whether name can be used as a single path element
